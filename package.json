@@ -1,0 +1,43 @@
+{
+  "name": "critcache",
+  "version": "0.1.0",
+  "description": "Fan out parallel AI code-review agents across a repo through BTL Runtime, and watch the cache savings land live.",
+  "type": "module",
+  "bin": {
+    "critcache": "./dist/cli.js"
+  },
+  "main": "./dist/cli.js",
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc && chmod +x dist/cli.js",
+    "prepublishOnly": "npm run build",
+    "start": "node dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "cli",
+    "ai",
+    "btl-runtime",
+    "code-review",
+    "llm-cache"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.1.0",
+    "ignore": "^5.3.2",
+    "p-limit": "^6.1.0",
+    "ora": "^8.1.1",
+    "cli-table3": "^0.6.5",
+    "chalk": "^5.3.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@types/node": "^22.7.5",
+    "tsx": "^4.19.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
