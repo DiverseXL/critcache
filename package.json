@@ -4,12 +4,12 @@
   "description": "Fan out parallel AI code-review agents across a repo through BTL Runtime — and watch the cache savings land live in your terminal.",
   "type": "module",
   "bin": {
-    "critcache": "./dist/cli.js"
+    "critcache": "dist/cli.js"
   },
   "main": "./dist/cli.js",
   "scripts": {
     "dev": "tsx src/cli.ts",
-    "build": "tsc && chmod +x dist/cli.js",
+    "build": "tsc",
     "prepublishOnly": "npm run build",
     "start": "node dist/cli.js"
   },
@@ -34,7 +34,7 @@
   "homepage": "https://critcache.vercel.app",
   "repository": {
     "type": "git",
-    "url": "https://github.com/DiverseXL/critcache"
+    "url": "git+https://github.com/DiverseXL/critcache.git"
   },
   "bugs": {
     "url": "https://github.com/DiverseXL/critcache/issues"
