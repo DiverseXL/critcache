@@ -1,7 +1,7 @@
 {
   "name": "critcache",
   "version": "0.1.0",
-  "description": "Fan out parallel AI code-review agents across a repo through BTL Runtime, and watch the cache savings land live.",
+  "description": "Fan out parallel AI code-review agents across a repo through BTL Runtime — and watch the cache savings land live in your terminal.",
   "type": "module",
   "bin": {
     "critcache": "./dist/cli.js"
@@ -14,28 +14,48 @@
     "start": "node dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "keywords": [
     "cli",
     "ai",
     "btl-runtime",
     "code-review",
-    "llm-cache"
+    "llm-cache",
+    "cache",
+    "parallel",
+    "agents",
+    "typescript",
+    "developer-tools",
+    "savings"
   ],
+  "homepage": "https://critcache.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DiverseXL/critcache"
+  },
+  "bugs": {
+    "url": "https://github.com/DiverseXL/critcache/issues"
+  },
+  "author": {
+    "name": "Samuel Akinjo",
+    "url": "https://github.com/DiverseXL"
+  },
   "license": "MIT",
   "dependencies": {
+    "chalk": "^5.3.0",
+    "cli-table3": "^0.6.5",
     "commander": "^12.1.0",
     "ignore": "^5.3.2",
-    "p-limit": "^6.1.0",
     "ora": "^8.1.1",
-    "cli-table3": "^0.6.5",
-    "chalk": "^5.3.0"
+    "p-limit": "^6.1.0"
   },
   "devDependencies": {
-    "typescript": "^5.6.3",
     "@types/node": "^22.7.5",
-    "tsx": "^4.19.1"
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3"
   },
   "engines": {
     "node": ">=18.0.0"
