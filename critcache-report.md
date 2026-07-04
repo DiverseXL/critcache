@@ -1,45 +1,66 @@
 # critcache report — .
 
-Generated 2026-07-03T20:32:58.662Z
+Generated 2026-07-04T09:47:17.255Z
 
 ## Savings summary
 
 | Metric | Value |
 | --- | --- |
-| Files analyzed | 1 |
+| Files analyzed | 3 |
 | Cache hits | 0 |
-| Cache misses | 1 |
-| Benchmark cost (no caching) | $0.0006 |
-| Actual charge (via BTL) | $0.0145 |
-| **Total saved** | **$0.0000** |
-| Savings rate | 0.0% |
+| Cache misses | 3 |
+| Benchmark cost (no caching) | $0.0049 |
+| Actual charge (via BTL) | $0.0057 |
+| **Total saved** | **$0.0008** |
+| Savings rate | 16.7% |
 
 ## Repo-level findings
 
 ### Architecture overview
 
-The codebase includes a BTL Runtime client designed for file analysis, which interacts with an external API to synthesize findings. The complexity is moderate, indicating a structured approach to handling API interactions.
+The codebase consists of a client library for interacting with the BTL Runtime API to analyze code files and synthesize repo-level summaries, a CLI tool to orchestrate repository analysis and reporting, and a runner module that manages concurrent file analysis with live progress feedback. The components work together to process source files, communicate with external AI services, and present aggregated results to users.
 
 ### Top risks
 
-- Exposed API key through environment variables
-- Potential for improper management of sensitive information
+- Lack of input sanitization in the CLI could allow malicious inputs leading to unexpected behavior.
+- Insufficient error handling and test coverage for network failures, file read errors, and synthesis errors may cause unhandled exceptions or inaccurate results.
+- API key management relies solely on environment variables without validation, rotation, rate limiting, or retry logic, increasing the risk of misuse or service disruption.
+- File reading without comprehensive size validation beyond truncation could lead to memory issues when processing very large files.
 
 ### Suggested next steps
 
-- Implement secure management practices for API keys
-- Conduct a security review of environment variable handling
-- Consider adding logging for API interactions to monitor usage
+- Implement comprehensive test coverage including mocks for error handling, network failures, and edge cases across all modules.
+- Add input validation and sanitization in the CLI to prevent potential injection or misuse from malicious user inputs.
+- Enhance API key management with validation, rotation policies, and implement rate limiting and retry mechanisms for robust API interactions.
+- Introduce stricter file size validation and error handling in the runner to safely manage large files and avoid memory exhaustion.
 
 ## Per-file analysis
 
 ### `src/btl-client.ts`
 
-- **Role:** BTL Runtime client for file analysis
+- **Role:** Client library for interacting with BTL Runtime API to analyze code files and synthesize repo-level summaries
 - **Complexity:** medium
-- **Test gaps:** none apparent
-- **Security note:** The API key is exposed through environment variables, which could be a risk if not managed properly.
-- **Summary:** This file defines a client that interacts with the BTL Runtime API to analyze files and synthesize repo-level findings.
+- **Test gaps:** No explicit test coverage or mocks for error handling and edge cases in parsing or network failures are shown
+- **Security note:** API key usage depends on environment variables without additional validation or rotation; no rate limiting or retry logic is implemented
+- **Summary:** This file provides functions to send code file contents to the BTL Runtime API for automated code review analysis, parse the JSON responses, simulate mock responses for offline use, and fetch metadata like available models and usage statistics.
+- **Cache tier:** unknown · **Saved:** $0.0000
+
+### `src/cli.ts`
+
+- **Role:** Command-line interface for orchestrating repo analysis and reporting via BTL Runtime
+- **Complexity:** medium
+- **Test gaps:** No explicit test coverage or test hooks are evident for CLI commands and error handling flows.
+- **Security note:** User input paths and options are used without sanitization, which could lead to unexpected behavior if malicious inputs are provided.
+- **Summary:** This file defines a CLI tool that allows users to analyze code repositories, compare cache performance, list available AI models, and show usage stats by interacting with BTL Runtime services.
+- **Cache tier:** unknown · **Saved:** $0.0000
+
+### `src/runner.ts`
+
+- **Role:** orchestrates concurrent analysis of source files and aggregates results with live terminal progress
+- **Complexity:** medium
+- **Test gaps:** no explicit error handling tests for file read failures or synthesis errors are evident
+- **Security note:** synchronously reads file contents without size validation beyond truncation, which could risk memory issues with very large files
+- **Summary:** This file runs bounded-concurrency analysis on a list of source files, renders live progress in the terminal, aggregates usage and cost metrics, and performs a final synthesis step summarizing repo-wide findings.
 - **Cache tier:** unknown · **Saved:** $0.0000
 
 ---

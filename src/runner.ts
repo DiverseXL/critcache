@@ -144,6 +144,7 @@ export async function runAnalysis(
             benchmarkCostUsd: undefined,
             customerChargeUsd: undefined,
             savedUsd: undefined,
+            requestId: undefined,
             responseTimeMs: undefined,
           },
           requestError: `Failed to read file: ${(err as Error).message}`,
