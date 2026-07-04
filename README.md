@@ -9,11 +9,24 @@
   v0.1.1 · parallel AI code review · powered by BTL Runtime
 ```
 
-[![npm](https://img.shields.io/npm/v/critcache)](https://www.npmjs.com/package/critcache)
-[![license](https://img.shields.io/npm/l/critcache)](./LICENSE)
-[![node](https://img.shields.io/node/v/critcache)](https://nodejs.org)
-
----
+> **BTL Runtime is the engine. critcache is the dashboard.**
+>
+> Every time your AI app makes a request, BTL Runtime knows:
+> - Did this response come from cache?
+> - How much did you save?
+> - Was this faster because of caching?
+>
+> But those details are buried in response headers most developers never look at.
+>
+> critcache makes the invisible visible — showing you in real time, per call, in your terminal:
+>
+> - `[hit 563ms]` — this request hit the cache
+> - `3× faster` than an uncached call  
+> - `$0.02 saved` on this one call alone
+>
+> Run `compare` on any repo and watch your cache hit rate climb from 0% to 67% between pass 1 and pass 2. That's not a claim — it's a receipt, printed live.
+>
+> **You can't improve what you can't measure. critcache gives you the measurement.**
 
 ## What is critcache?
 
