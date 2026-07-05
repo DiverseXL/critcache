@@ -1,67 +1,83 @@
 # critcache report — .
 
-Generated 2026-07-04T09:47:17.255Z
+> Generated 2026-07-05T15:05:42.625Z
 
-## Savings summary
+## 💰 Savings summary
 
 | Metric | Value |
 | --- | --- |
 | Files analyzed | 3 |
 | Cache hits | 0 |
 | Cache misses | 3 |
-| Benchmark cost (no caching) | $0.0049 |
-| Actual charge (via BTL) | $0.0057 |
-| **Total saved** | **$0.0008** |
-| Savings rate | 16.7% |
+| Benchmark cost (no caching) | $0.0560 |
+| Actual charge (via BTL) | $0.0350 |
+| **Total saved** | **$0.0210** |
+| Savings rate | 37.5% |
 
-## Repo-level findings
+> **Cache hit rate:** 0% · 0 hits · 3 misses · $0.0210 total saved
+
+## ⚠️ Highlights
+
+### Security notes
+
+- `src/btl-client.ts` — [mock] none apparent
+- `src/cli.ts` — [mock] none apparent
+- `src/fingerprint.ts` — [mock] none apparent
+
+### High-complexity files
+
+- `src/btl-client.ts`
+- `src/cli.ts`
+- `src/fingerprint.ts`
+
+## 🧠 Repo-level findings
 
 ### Architecture overview
 
-The codebase consists of a client library for interacting with the BTL Runtime API to analyze code files and synthesize repo-level summaries, a CLI tool to orchestrate repository analysis and reporting, and a runner module that manages concurrent file analysis with live progress feedback. The components work together to process source files, communicate with external AI services, and present aggregated results to users.
+[mock] Simulated repo-level summary covering 3 reviewed file(s). Run with a real GATEWAY_API_KEY for an actual synthesis.
 
 ### Top risks
 
-- Lack of input sanitization in the CLI could allow malicious inputs leading to unexpected behavior.
-- Insufficient error handling and test coverage for network failures, file read errors, and synthesis errors may cause unhandled exceptions or inaccurate results.
-- API key management relies solely on environment variables without validation, rotation, rate limiting, or retry logic, increasing the risk of misuse or service disruption.
-- File reading without comprehensive size validation beyond truncation could lead to memory issues when processing very large files.
+- ⚠️ [mock] this is simulated output — set GATEWAY_API_KEY and unset CRITCACHE_MOCK for real findings
 
 ### Suggested next steps
 
-- Implement comprehensive test coverage including mocks for error handling, network failures, and edge cases across all modules.
-- Add input validation and sanitization in the CLI to prevent potential injection or misuse from malicious user inputs.
-- Enhance API key management with validation, rotation policies, and implement rate limiting and retry mechanisms for robust API interactions.
-- Introduce stricter file size validation and error handling in the runner to safely manage large files and avoid memory exhaustion.
+- 💡 [mock] unset CRITCACHE_MOCK once a real key is available
 
-## Per-file analysis
+## 📄 Per-file analysis
 
 ### `src/btl-client.ts`
 
-- **Role:** Client library for interacting with BTL Runtime API to analyze code files and synthesize repo-level summaries
-- **Complexity:** medium
-- **Test gaps:** No explicit test coverage or mocks for error handling and edge cases in parsing or network failures are shown
-- **Security note:** API key usage depends on environment variables without additional validation or rotation; no rate limiting or retry logic is implemented
-- **Summary:** This file provides functions to send code file contents to the BTL Runtime API for automated code review analysis, parse the JSON responses, simulate mock responses for offline use, and fetch metadata like available models and usage statistics.
-- **Cache tier:** unknown · **Saved:** $0.0000
+| | |
+|---|---|
+| **Role** | [mock] plays a role in btl-client.ts |
+| **Complexity** | 🔴 High |
+| **Test gaps** | [mock] no real analysis performed — running in mock mode |
+| **Security note** | [mock] none apparent |
+| **Summary** | [mock] simulated summary for src/btl-client.ts |
+| **Cache** | ❌ Miss (`none`) · **Saved:** $0.0050 |
 
 ### `src/cli.ts`
 
-- **Role:** Command-line interface for orchestrating repo analysis and reporting via BTL Runtime
-- **Complexity:** medium
-- **Test gaps:** No explicit test coverage or test hooks are evident for CLI commands and error handling flows.
-- **Security note:** User input paths and options are used without sanitization, which could lead to unexpected behavior if malicious inputs are provided.
-- **Summary:** This file defines a CLI tool that allows users to analyze code repositories, compare cache performance, list available AI models, and show usage stats by interacting with BTL Runtime services.
-- **Cache tier:** unknown · **Saved:** $0.0000
+| | |
+|---|---|
+| **Role** | [mock] plays a role in cli.ts |
+| **Complexity** | 🔴 High |
+| **Test gaps** | [mock] no real analysis performed — running in mock mode |
+| **Security note** | [mock] none apparent |
+| **Summary** | [mock] simulated summary for src/cli.ts |
+| **Cache** | ❌ Miss (`none`) · **Saved:** $0.0050 |
 
-### `src/runner.ts`
+### `src/fingerprint.ts`
 
-- **Role:** orchestrates concurrent analysis of source files and aggregates results with live terminal progress
-- **Complexity:** medium
-- **Test gaps:** no explicit error handling tests for file read failures or synthesis errors are evident
-- **Security note:** synchronously reads file contents without size validation beyond truncation, which could risk memory issues with very large files
-- **Summary:** This file runs bounded-concurrency analysis on a list of source files, renders live progress in the terminal, aggregates usage and cost metrics, and performs a final synthesis step summarizing repo-wide findings.
-- **Cache tier:** unknown · **Saved:** $0.0000
+| | |
+|---|---|
+| **Role** | [mock] plays a role in fingerprint.ts |
+| **Complexity** | 🔴 High |
+| **Test gaps** | [mock] no real analysis performed — running in mock mode |
+| **Security note** | [mock] none apparent |
+| **Summary** | [mock] simulated summary for src/fingerprint.ts |
+| **Cache** | ❌ Miss (`none`) · **Saved:** $0.0050 |
 
 ---
 

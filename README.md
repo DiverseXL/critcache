@@ -171,6 +171,160 @@ npx critcache compare ./my-project --max-files 5
   Cache hit rate jumped from 0% to 67% on the warm pass.
 ```
 
+### `watch <repo>`
+
+```bash
+$ npx critcache watch <repo>
+```
+
+Sits in your terminal while you code, re-analyzes changed files through BTL Runtime automatically on every save, and shows whether the save was a cache hit or miss. First save: ~3800ms miss. Second save: ~400ms hit. That's BTL Runtime's cache warming in real time, no commands needed.
+
+**Options:**
+
+| Option | Default | Description |
+|---|---|---|
+| `--max-files, -m` | 20 | Maximum files to watch |
+| `--debounce, -d` | 600 | Debounce delay in ms after a file save |
+| `--sarif` | — | Write live-updating critcache-watch.sarif on each change |
+
+---
+
+### `review-pr <repo> <target>`
+
+```bash
+$ npx critcache review-pr <repo> <target>
+```
+
+Reviews only the files changed between your current branch and a target branch — the daily-driver mode for PR review. Uses git diff under the hood, no GitHub API required. Pipes changed file content through BTL Runtime with the same fixed prompt architecture, so cache warming works across repeated PR reviews of the same codebase.
+
+**Options:**
+
+| Option | Default | Description |
+|---|---|---|
+| `--concurrency, -c` | 6 | Parallel requests at once |
+| `--output, -o` | critcache-pr-report.md | Report output path |
+| `--sarif` | — | Also write a .sarif report |
+
+**Example:**
+
+```bash
+npx critcache review-pr . main
+npx critcache review-pr . origin/main
+npx critcache review-pr . HEAD~1
+```
+
+---
+
+### `diff [branch]`
+
+```bash
+$ npx critcache diff [branch]
+```
+
+Reviews uncommitted changes (no branch specified) or changes against a branch. Fastest way to review what you just wrote before committing.
+
+```bash
+npx critcache diff              # review uncommitted changes
+npx critcache diff main         # review changes vs main
+```
+
+---
+
+## CI integration — GitHub Actions
+
+critcache fits naturally into CI pipelines. Here's a complete GitHub Actions workflow that runs critcache on every PR, uploads SARIF to GitHub Code Scanning, and posts results as a PR comment.
+
+### GitHub Actions workflow (`.github/workflows/critcache.yml`)
+
+```yaml
+name: critcache AI code review
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write  # Required for SARIF upload
+  pull-requests: write    # Required for PR comments
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required for review-pr to diff against target
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run critcache PR review
+        run: npx critcache review-pr . origin/main --sarif --output critcache-ci-report.md
+        env:
+          GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+        continue-on-error: true  # Don't fail CI on review results
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: critcache-ci-report.sarif
+          category: critcache
+
+      - name: Post PR comment with results
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: critcache-ci-report.md
+```
+
+### Setting up
+
+1. **Get a BTL Runtime API key** at [runtime.badtheorylabs.com](https://runtime.badtheorylabs.com)
+2. **Add the key to your GitHub repository secrets** as `GATEWAY_API_KEY` (Settings → Secrets and variables → Actions)
+3. **Create the workflow file** at `.github/workflows/critcache.yml` with the content above
+4. **Enable Code Scanning** — after the first run, go to your repo's Security tab → Code Scanning → add the `critcache` tool
+
+### How it works in CI
+
+- On every PR, critcache diffs the PR branch against `origin/main` and analyzes only the changed files
+- Results are written as SARIF and uploaded to GitHub Code Scanning — findings appear in the Security tab
+- A markdown report is posted as a PR comment with savings data, security notes, and analysis details
+- The workflow uses `continue-on-error: true` so CI doesn't block on review findings — they're advisory
+
+### Alternative: scheduled full analysis
+
+```yaml
+name: Weekly critcache analysis
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"  # Every Monday at 8 AM UTC
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run critcache full analysis
+        run: npx critcache analyze . --sarif --max-files 50
+        env:
+          GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: critcache-report.sarif
+          category: critcache-weekly
+```
+
 ---
 
 ## Environment variables
@@ -183,6 +337,61 @@ npx critcache compare ./my-project --max-files 5
 | `CRITCACHE_MOCK` | No | — | Set to `1` to enable mock mode |
 
 *Not required when `CRITCACHE_MOCK=1` is set.
+
+---
+
+## SARIF output
+
+Add `--sarif` to any analysis command to write a SARIF v2.1 report alongside the markdown report:
+
+```bash
+npx critcache analyze . --sarif        # writes critcache-report.sarif
+npx critcache review-pr . main --sarif # writes critcache-pr-report.sarif
+npx critcache watch . --sarif          # writes live-updating critcache-watch.sarif
+```
+
+SARIF (Static Analysis Results Interchange Format) is the standard format consumed natively by:
+
+- **GitHub Code Scanning** — upload to the Security tab, get inline PR annotations
+- **VS Code** — open the `.sarif` file directly, see findings in the Problems panel
+- **GitLab SAST** — compatible with GitLab's security dashboard
+- **Azure DevOps** — consumed by the SARIF SAST Results Import task
+
+**GitHub Actions CI example:**
+
+```yaml
+- name: Run critcache
+  run: GATEWAY_API_KEY=${{ secrets.BTL_KEY }} npx critcache review-pr . main --sarif
+
+- name: Upload to Code Scanning
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: critcache-pr-report.sarif
+```
+
+---
+
+## Custom review rules
+
+Create a `.critcacherules` file in your repo root to focus the analysis on what matters to your team:
+
+```
+# Security
+- Flag hardcoded credentials, API keys, or tokens
+- Check for SQL injection vulnerabilities in raw queries
+- Flag unvalidated user input in financial calculations
+
+# Performance
+- Look for N+1 query patterns in database calls
+- Flag synchronous operations in async contexts
+
+# Team standards
+- This is a financial application — treat any unvalidated input as high severity
+```
+
+Rules are appended to the fixed system prompt and hashed into the prompt fingerprint. Changing your rules file will show as a fingerprint change and correctly bust the BTL Runtime cache — ensuring fresh analysis that reflects your updated standards.
+
+The base system prompt stays byte-identical across all files in a run, so BTL's exact and prefix caching still works within a single session.
 
 ---
 
@@ -223,11 +432,46 @@ This is the core BTL Runtime integration insight: **design your prompt architect
 
 ## Output
 
+### Markdown report
+
 Every `analyze` run writes a `critcache-report.md` to your current directory containing:
 
 - Savings summary table (files analyzed, cache hits/misses, benchmark vs actual cost)
 - Repo-level synthesis (architecture overview, top risks, suggested next steps)
 - Per-file detail (role, complexity, test gaps, security note, summary, cache tier)
+
+### SARIF — native GitHub & VS Code integration
+
+Pass `--sarif` to any analysis command to also emit a **SARIF v2.1** file alongside the markdown report:
+
+```bash
+npx critcache analyze . --sarif
+npx critcache review-pr . main --sarif
+npx critcache watch . --sarif
+```
+
+**Why SARIF matters:**
+
+SARIF (Static Analysis Results Interchange Format) is the OASIS standard format for static analysis tool output. critcache's SARIF output is consumed natively by:
+
+- **GitHub Code Scanning** — upload the `.sarif` file in CI and findings appear in the Security tab
+- **VS Code** — install the [SARIF Viewer extension](https://marketplace.visualstudio.com/items?itemName=MS-SarifVSCode.sarif-viewer) and open the `.sarif` file to see results inline in the Problems panel
+- **GitLab SAST** — SARIF is GitLab's native SAST format
+- **Azure DevOps** — SARIF results are rendered in the Pipeline and pull request experience
+
+Each SARIF result includes:
+- File-level analysis summaries with `note` severity
+- Security warnings promoted to `warning` severity so they stand out
+- Test coverage gaps surfaced as separate findings
+- Custom properties with complexity, role, cache tier, and savings per file
+- Repo-level synthesis risks and next steps as informational results
+
+**Zero integration code needed on critcache's side.** Every SARIF consumer already understands the format — critcache just writes the file.
+
+```bash
+# Open SARIF results in VS Code (after installing the SARIF Viewer extension)
+code critcache-report.sarif
+```
 
 ---
 
@@ -273,6 +517,36 @@ Because the target user is a developer already in a terminal. A CLI integrates i
 **Couldn't this just run on any LLM provider?**
 
 Technically yes — critcache uses the OpenAI-compatible `/v1/chat/completions` endpoint. But without BTL Runtime's caching layer, the `compare` command has nothing to prove. The cold-to-warm cache hit rate jump is the product. BTL Runtime is not incidental infrastructure — it's the feature.
+
+---
+
+## BTL Runtime API surface
+
+critcache uses the following BTL Runtime endpoints:
+
+| Endpoint | Command | Purpose |
+|---|---|---|
+| `POST /v1/chat/completions` | `analyze`, `compare`, `review-pr`, `watch` | Per-file AI code review and repo-level synthesis |
+| `GET /v1/models` | `models` | Lists all available model slugs across providers |
+| `GET /v1/usage/summary` | `stats` | Cumulative workspace spend, savings, and cache hit breakdown |
+
+BTL-specific response headers read per call:
+
+| Header | Used for |
+|---|---|
+| `x-btl-cache-tier` | Cache tier display per file |
+| `x-btl-benchmark-cost` | Cost without caching |
+| `x-btl-customer-charge` | Actual charge after caching |
+| `x-btl-saved` | Per-call savings |
+| `x-btl-request-id` | Debug reference |
+
+BTL Runtime savings mechanisms confirmed active in this workspace (from `critcache stats`):
+
+- **Exact response cache** — 11 hits confirmed, serving repeated file analyses in ~560ms vs ~3500ms
+- **Provider prompt cache** — prefix reuse at the upstream provider level
+- **Request compaction** — conversation history compressed before hitting the provider
+- **Output budget shaping** — runaway completions capped automatically
+- **Smart routing** — `btl-2` routes to cheapest healthy provider per request
 
 ---
 

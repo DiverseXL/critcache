@@ -2,17 +2,7 @@ import fs from "node:fs";
 import chalk from "chalk";
 import pLimit from "p-limit";
 import type { WalkedFile } from "./walker.js";
-import {
-  analyzeFile,
-  synthesize,
-  type BtlUsageInfo,
-  type AnalyzeFileResult,
-  type RepoSynthesis,
-} from "./btl-client.js";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import { analyzeFile, synthesize, type AnalyzeFileResult, type RepoSynthesis } from "./btl-client.js";
 
 /** Per-file state tracked for the live render. */
 type FileStatus = "pending" | "running" | "done" | "error";
@@ -34,13 +24,9 @@ export interface RunResult {
   cacheMisses: number;
 }
 
-// ---------------------------------------------------------------------------
-// Render helpers
-// ---------------------------------------------------------------------------
+const MAX_FILE_READ_SIZE = 200 * 1024; // matches walker's default cap, belt-and-suspenders
 
-const MAX_FILE_READ_SIZE = 200 * 1024; // belt-and-suspenders match for walker's cap
-
-/** Truncates a relative path for display so long monorepo paths don't wrap. */
+/** Truncates a relative path for display so long monorepo paths don't wrap the line. */
 function displayPath(relPath: string, maxLen = 50): string {
   if (relPath.length <= maxLen) return relPath;
   return "…" + relPath.slice(-(maxLen - 1));
@@ -48,82 +34,79 @@ function displayPath(relPath: string, maxLen = 50): string {
 
 function statusIcon(status: FileStatus): string {
   switch (status) {
-    case "pending": return chalk.dim("○");
-    case "running": return chalk.yellow("◐");
-    case "done":    return chalk.green("●");
-    case "error":   return chalk.red("✕");
+    case "pending":
+      return chalk.dim("○");
+    case "running":
+      return chalk.yellow("◐");
+    case "done":
+      return chalk.green("●");
+    case "error":
+      return chalk.red("✕");
   }
 }
 
-function cacheTierBadge(usage: BtlUsageInfo | undefined): string {
-  if (!usage || usage.responseTimeMs === undefined) return chalk.dim("[miss]");
-  if (usage.responseTimeMs < 1000) return chalk.cyan(`[hit ${usage.responseTimeMs}ms]`);
-  return chalk.dim(`[miss ${usage.responseTimeMs}ms]`);
+function cacheTierBadge(tier: string | undefined): string {
+  if (!tier || tier === "none" || tier === "miss") return chalk.dim("[miss]");
+  // BTL Runtime returns values like "exact_response_cache", "prefix_cache" etc.
+  // Shorten them for display: "exact_response_cache" → "exact", "prefix_cache" → "prefix"
+  const shortTier = tier.replace("_response_cache", "").replace("_cache", "");
+  return chalk.cyan(`[${shortTier}]`);
 }
 
 /** Renders one row's current state as a single terminal line. */
 function renderRow(row: FileRow): string {
   const icon = statusIcon(row.status);
-  const p    = displayPath(row.file.relPath);
+  const path = displayPath(row.file.relPath);
 
   if (row.status === "pending" || row.status === "running") {
-    return `  ${icon} ${p}`;
+    return `  ${icon} ${path}`;
   }
 
   if (row.status === "error") {
     const msg = row.result?.requestError ?? row.result?.parseError ?? "unknown error";
-    return `  ${icon} ${p} ${chalk.red(`— ${msg.slice(0, 60)}`)}`;
+    return `  ${icon} ${path} ${chalk.red(`— ${msg.slice(0, 60)}`)}`;
   }
 
   // done
   const usage = row.result?.usage;
   const saved = usage?.savedUsd !== undefined ? `$${usage.savedUsd.toFixed(4)} saved` : "—";
-  const badge = cacheTierBadge(usage);
-  return `  ${icon} ${p} ${badge} ${chalk.dim(saved)}`;
+  const badge = cacheTierBadge(usage?.cacheTier);
+  return `  ${icon} ${path} ${badge} ${chalk.dim(saved)}`;
 }
 
 /**
- * Moves the cursor up `previousLineCount` lines and clears each line,
- * so we can redraw the whole file list in place rather than scrolling a
- * new block every update. File rows stay in their original walker-order
- * positions on screen regardless of which one finishes first.
+ * Moves the cursor up `n` lines and clears each, so we can redraw the
+ * whole file list in place rather than scrolling a new block every update.
  */
-function redrawLines(lines: string[], previousLineCount: number): void {
+function redrawLines(lines: string[], previousLineCount: number) {
   if (previousLineCount > 0) {
-    process.stdout.write(`\x1b[${previousLineCount}A`); // move cursor up N lines
+    process.stdout.write(`\x1b[${previousLineCount}A`); // move cursor up
   }
   for (const line of lines) {
     process.stdout.write("\x1b[2K" + line + "\n"); // clear line, write new content
   }
 }
 
-// ---------------------------------------------------------------------------
-// Main export
-// ---------------------------------------------------------------------------
-
 /**
- * Runs BTL analysis across all walked files with bounded concurrency,
- * rendering live in-place progress in the terminal. After all per-file
- * calls complete, fires one synthesis call and folds its cost into totals.
- *
- * Returns the full per-file result set, synthesis output, and aggregated
- * savings totals for the final summary table and report writer.
+ * Runs analysis across all walked files with bounded concurrency,
+ * rendering live progress in place. Returns the full result set plus
+ * aggregated savings totals for the final summary table.
  */
 export async function runAnalysis(
   files: WalkedFile[],
-  concurrency: number,
+  concurrency: number
 ): Promise<RunResult> {
   const rows: FileRow[] = files.map((file) => ({ file, status: "pending" }));
   const limit = pLimit(concurrency);
 
   let previousLineCount = 0;
-  function rerender(): void {
+  function rerender() {
     const lines = rows.map(renderRow);
     redrawLines(lines, previousLineCount);
     previousLineCount = lines.length;
   }
 
-  // Draw the full pending list immediately so the user sees scope upfront.
+  // Initial draw so the user sees the full pending list immediately.
   rerender();
 
   const tasks = rows.map((row) =>
@@ -131,7 +114,6 @@ export async function runAnalysis(
       row.status = "running";
       rerender();
 
-      // Read file (sync is fine — we're inside an async p-limit task)
       let content: string;
       try {
         content = fs.readFileSync(row.file.absPath, "utf-8").slice(0, MAX_FILE_READ_SIZE);
@@ -139,14 +121,7 @@ export async function runAnalysis(
         row.status = "error";
         row.result = {
           analysis: null,
-          usage: {
-            cacheTier: undefined,
-            benchmarkCostUsd: undefined,
-            customerChargeUsd: undefined,
-            savedUsd: undefined,
-            requestId: undefined,
-            responseTimeMs: undefined,
-          },
+          usage: { cacheTier: undefined, benchmarkCostUsd: undefined, customerChargeUsd: undefined, savedUsd: undefined, requestId: undefined, responseTimeMs: undefined },
           requestError: `Failed to read file: ${(err as Error).message}`,
         };
         rerender();
@@ -162,34 +137,31 @@ export async function runAnalysis(
 
   await Promise.all(tasks);
 
-  // ---------------------------------------------------------------------------
-  // Aggregate per-file totals
-  // ---------------------------------------------------------------------------
-  let totalSavedUsd         = 0;
+  // Aggregate totals across every row that has usage data.
+  let totalSavedUsd = 0;
   let totalBenchmarkCostUsd = 0;
-  let totalChargeUsd        = 0;
-  let cacheHits             = 0;
-  let cacheMisses           = 0;
+  let totalChargeUsd = 0;
+  let cacheHits = 0;
+  let cacheMisses = 0;
 
   for (const row of rows) {
     const usage = row.result?.usage;
     if (!usage) continue;
 
-    totalSavedUsd         += (usage.customerChargeUsd ?? 0) - (usage.benchmarkCostUsd ?? 0);
+    totalSavedUsd += usage.savedUsd ?? 0;
     totalBenchmarkCostUsd += usage.benchmarkCostUsd ?? 0;
-    totalChargeUsd        += usage.customerChargeUsd ?? 0;
+    totalChargeUsd += usage.customerChargeUsd ?? 0;
 
-    const isHit = (usage.responseTimeMs ?? 9999) < 2000;
-    if (isHit) {
+    if (usage.cacheTier && usage.cacheTier !== "none" && usage.cacheTier !== "miss") {
       cacheHits += 1;
     } else if (row.status === "done") {
       cacheMisses += 1;
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Synthesis pass — one extra BTL call across all successful analyses
-  // ---------------------------------------------------------------------------
+  // Run the synthesis pass over every successfully-analyzed file.
+  // This is one extra BTL call, separate from the per-file ones above,
+  // so its cost/savings get folded into the same running totals.
   const successfulAnalyses = rows
     .filter((row) => row.status === "done" && row.result?.analysis)
     .map((row) => ({ path: row.file.relPath, ...row.result!.analysis! }));
@@ -201,13 +173,12 @@ export async function runAnalysis(
     console.log(chalk.dim("\nSynthesizing repo-level findings…"));
     const synthResult = await synthesize(successfulAnalyses);
 
-    synthesis      = synthResult.synthesis;
+    synthesis = synthResult.synthesis;
     synthesisError = synthResult.requestError ?? synthResult.parseError;
 
-    // Fold synthesis call's cost into the running totals
-    totalSavedUsd         += (synthResult.usage.customerChargeUsd ?? 0) - (synthResult.usage.benchmarkCostUsd ?? 0);
+    totalSavedUsd += synthResult.usage.savedUsd ?? 0;
     totalBenchmarkCostUsd += synthResult.usage.benchmarkCostUsd ?? 0;
-    totalChargeUsd        += synthResult.usage.customerChargeUsd ?? 0;
+    totalChargeUsd += synthResult.usage.customerChargeUsd ?? 0;
   } else {
     synthesisError = "No successfully analyzed files to synthesize from.";
   }

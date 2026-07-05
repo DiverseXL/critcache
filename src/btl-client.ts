@@ -25,7 +25,10 @@ const BTL_API_KEY = process.env.GATEWAY_API_KEY ?? process.env.BTL_API_KEY;
 // if the network drops mid-presentation.
 const MOCK_MODE = process.env.CRITCACHE_MOCK === "1";
 
-const SYSTEM_PROMPT = `You are a careful, senior code reviewer analyzing a single file from a larger codebase.
+import type { PromptComponents } from "./fingerprint.js";
+import { buildSystemPrompt } from "./rules.js";
+
+export const SYSTEM_PROMPT = `You are a careful, senior code reviewer analyzing a single file from a larger codebase.
 
 Respond with ONLY a JSON object, no markdown fences, no commentary, matching this exact shape:
 
@@ -38,6 +41,46 @@ Respond with ONLY a JSON object, no markdown fences, no commentary, matching thi
 }
 
 Be concrete and specific to the actual code shown. Do not pad with generic advice.`;
+
+// --- Custom review rules (.critcacherules) ---
+//
+// Module-level state holding the custom review rules content for the current
+// run. Set once at startup by the CLI before any analysis begins. The rules
+// content is appended to the base system prompt via buildSystemPrompt(),
+// keeping SYSTEM_PROMPT itself byte-identical for library consumers.
+//
+// Rules are a repo-level constant (not per-file), so all calls in the same
+// run get the same derived prompt, preserving BTL's exact-match caching.
+
+let currentRulesContent: string | null = null;
+
+/**
+ * Sets the custom review rules content for the current run.
+ * Called once at CLI startup before any analysis begins.
+ */
+export function setRulesContent(content: string | null): void {
+  currentRulesContent = content;
+}
+
+/** Returns the current rules content (null if no rules are active). */
+export function getRulesContent(): string | null {
+  return currentRulesContent;
+}
+
+/**
+ * Returns the PromptComponents for the current run, including the
+ * active rules content (or empty string if no rules are set).
+ * Called by fingerprint.ts to hash and detect changes.
+ */
+export function getPromptComponents(): PromptComponents {
+  return {
+    systemPrompt: SYSTEM_PROMPT,
+    schema: SYSTEM_PROMPT,
+    model: process.env.BTL_MODEL ?? "btl-2",
+    temperature: 0,
+    rules: currentRulesContent ?? "",
+  };
+}
 
 const SYNTHESIS_SYSTEM_PROMPT = `You are a senior engineer producing a repo-level summary from a set of individual file reviews.
 
@@ -70,7 +113,7 @@ export interface BtlUsageInfo {
   savedUsd: number | undefined;
   /** Confirmed real header per BTL's own docs — useful for support/debugging if a call misbehaves. */
   requestId: string | undefined;
-  /** Client-side measured round-trip time for this call, in milliseconds. */
+  /** Time from request start to response received, in ms. Used for cache hit detection. */
   responseTimeMs: number | undefined;
 }
 
@@ -108,14 +151,14 @@ function readNumericHeader(headers: Headers, name: string): number | undefined {
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
-function readUsageInfo(headers: Headers): BtlUsageInfo {
+function readUsageInfo(headers: Headers, responseTimeMs?: number): BtlUsageInfo {
   return {
     cacheTier: headers.get("x-btl-cache-tier") ?? undefined,
     benchmarkCostUsd: readNumericHeader(headers, "x-btl-benchmark-cost"),
     customerChargeUsd: readNumericHeader(headers, "x-btl-customer-charge"),
     savedUsd: readNumericHeader(headers, "x-btl-saved"),
     requestId: headers.get("x-btl-request-id") ?? undefined,
-    responseTimeMs: undefined,
+    responseTimeMs,
   };
 }
 
@@ -206,17 +249,16 @@ async function callBtlRuntime<T>(
   userMessage: string,
   parse: (rawText: string) => T
 ): Promise<BtlCallOutcome<T>> {
-  const startTime = performance.now();
-
   if (!BTL_API_KEY) {
     return {
       parsed: null,
-      usage: { ...EMPTY_USAGE, responseTimeMs: Math.round(performance.now() - startTime) },
+      usage: EMPTY_USAGE,
       requestError: "GATEWAY_API_KEY is not set. Export it before running critcache (BTL_API_KEY also works).",
     };
   }
 
   let response: Response;
+  const requestStart = Date.now();
   try {
     response = await fetch(`${BTL_BASE_URL}/chat/completions`, {
       method: "POST",
@@ -225,10 +267,7 @@ async function callBtlRuntime<T>(
         Authorization: `Bearer ${BTL_API_KEY}`,
       },
       body: JSON.stringify({
-        // BTL's own docs smoke-test against "gpt-4.1-mini" as a real,
-        // concrete model name — there's no confirmed "auto" alias.
-        // Override via BTL_MODEL once you know what your dashboard shows.
-        model: process.env.BTL_MODEL ?? "gpt-4.1-mini",
+        model: process.env.BTL_MODEL ?? "btl-2",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userMessage },
@@ -239,18 +278,19 @@ async function callBtlRuntime<T>(
   } catch (err) {
     return {
       parsed: null,
-      usage: { ...EMPTY_USAGE, responseTimeMs: Math.round(performance.now() - startTime) },
+      usage: EMPTY_USAGE,
       requestError: `Network error calling BTL Runtime: ${(err as Error).message}`,
     };
   }
 
-  const usage = readUsageInfo(response.headers);
+  const responseTimeMs = Date.now() - requestStart;
+  const usage = readUsageInfo(response.headers, responseTimeMs);
 
   if (!response.ok) {
     const bodyText = await response.text().catch(() => "");
     return {
       parsed: null,
-      usage: { ...usage, responseTimeMs: Math.round(performance.now() - startTime) },
+      usage,
       requestError: `BTL Runtime returned ${response.status}: ${bodyText.slice(0, 300)}`,
     };
   }
@@ -261,18 +301,18 @@ async function callBtlRuntime<T>(
   if (!rawText) {
     return {
       parsed: null,
-      usage: { ...usage, responseTimeMs: Math.round(performance.now() - startTime) },
+      usage,
       parseError: "No message content in BTL Runtime response.",
     };
   }
 
   try {
     const parsed = parse(rawText);
-    return { parsed, usage: { ...usage, responseTimeMs: Math.round(performance.now() - startTime) } };
+    return { parsed, usage };
   } catch (err) {
     return {
       parsed: null,
-      usage: { ...usage, responseTimeMs: Math.round(performance.now() - startTime) },
+      usage,
       parseError: `Failed to parse model output as JSON: ${(err as Error).message}`,
     };
   }
@@ -288,13 +328,13 @@ async function callBtlRuntime<T>(
 // for producing numbers that should be trusted as real savings data.
 const mockSeenCount = new Map<string, number>();
 
-function mockDelay(): Promise<number> {
+function mockDelay(): Promise<void> {
   const ms = 150 + Math.random() * 350;
-  return new Promise((resolve) => setTimeout(() => resolve(Math.round(ms)), ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function mockAnalyzeFile(relPath: string, content: string): Promise<AnalyzeFileResult> {
-  const responseTimeMs = await mockDelay();
+  await mockDelay();
 
   const seen = (mockSeenCount.get(relPath) ?? 0) + 1;
   mockSeenCount.set(relPath, seen);
@@ -317,7 +357,7 @@ async function mockAnalyzeFile(relPath: string, content: string): Promise<Analyz
       customerChargeUsd: isHit ? 0.0007 : 0.007,
       savedUsd: isHit ? 0.0113 : 0.005,
       requestId: `mock_${Math.random().toString(36).slice(2, 10)}`,
-      responseTimeMs,
+      responseTimeMs: isHit ? 400 + Math.floor(Math.random() * 400) : 3000 + Math.floor(Math.random() * 2000),
     },
   };
 }
@@ -325,7 +365,7 @@ async function mockAnalyzeFile(relPath: string, content: string): Promise<Analyz
 async function mockSynthesize(
   fileAnalyses: Array<{ path: string } & FileAnalysis>
 ): Promise<SynthesizeResult> {
-  const responseTimeMs = await mockDelay();
+  await mockDelay();
 
   return {
     synthesis: {
@@ -339,7 +379,7 @@ async function mockSynthesize(
       customerChargeUsd: 0.014,
       savedUsd: 0.006,
       requestId: `mock_${Math.random().toString(36).slice(2, 10)}`,
-      responseTimeMs,
+      responseTimeMs: 800,
     },
   };
 }
@@ -347,8 +387,9 @@ async function mockSynthesize(
 export async function analyzeFile(relPath: string, content: string): Promise<AnalyzeFileResult> {
   if (MOCK_MODE) return mockAnalyzeFile(relPath, content);
 
+  const effectivePrompt = buildSystemPrompt(SYSTEM_PROMPT, currentRulesContent);
   const userMessage = `File: ${relPath}\n\n\`\`\`\n${content}\n\`\`\``;
-  const outcome = await callBtlRuntime(SYSTEM_PROMPT, userMessage, parseAnalysis);
+  const outcome = await callBtlRuntime(effectivePrompt, userMessage, parseAnalysis);
 
   return {
     analysis: outcome.parsed,
@@ -368,8 +409,9 @@ export async function synthesize(
 ): Promise<SynthesizeResult> {
   if (MOCK_MODE) return mockSynthesize(fileAnalyses);
 
+  const effectivePrompt = buildSystemPrompt(SYNTHESIS_SYSTEM_PROMPT, currentRulesContent);
   const userMessage = JSON.stringify(fileAnalyses, null, 2);
-  const outcome = await callBtlRuntime(SYNTHESIS_SYSTEM_PROMPT, userMessage, parseSynthesis);
+  const outcome = await callBtlRuntime(effectivePrompt, userMessage, parseSynthesis);
 
   return {
     synthesis: outcome.parsed,
@@ -450,7 +492,6 @@ export interface BtlUsageSummary {
   totalRequests?: number;
   totalSpend?: number;
   totalSaved?: number;
-  cachedTokens?: number;
   cacheHitRate?: number;
   period?: string;
 }
@@ -470,11 +511,10 @@ export async function fetchStats(): Promise<FetchStatsResult> {
   if (MOCK_MODE) {
     return {
       summary: {
-        totalRequests: 20,
-        totalSpend: 0.0059,
+        totalRequests: 42,
+        totalSpend: 0.18,
         totalSaved: 0.09,
-        cachedTokens: 4992,
-        cacheHitRate: 55,
+        cacheHitRate: 50,
         period: "all time",
       },
       raw: null,
@@ -516,16 +556,25 @@ export async function fetchStats(): Promise<FetchStatsResult> {
 
   const data: any = await response.json();
 
+  // BTL's exact response shape for /v1/usage/summary is unverified —
+  // we store the raw response and try to extract known fields defensively.
+  // If fields differ, raw is printed as a fallback so nothing is lost.
   const summary: BtlUsageSummary = {
-    totalRequests: data?.request_count,
-    totalSpend: data?.benchmark_direct_cost,
-    totalSaved: data?.customer_saved,
-    cachedTokens: data?.cached_input_tokens,
-    cacheHitRate: data?.cache_tiers
-      ? ((data.cache_tiers.exact_response ?? 0) / (data.request_count ?? 1)) * 100
-      : undefined,
-    period: "all time",
+    totalRequests: data?.total_requests ?? data?.totalRequests,
+    totalSpend: data?.total_spend ?? data?.totalSpend ?? data?.total_charge,
+    totalSaved: data?.total_saved ?? data?.totalSaved,
+    cacheHitRate: data?.cache_hit_rate ?? data?.cacheHitRate,
+    period: data?.period ?? "all time",
   };
 
-  return { summary, raw: data as Record<string, unknown> };
+  return { summary, raw: data };
 }
+
+/**
+ * NOTE: PROMPT_COMPONENTS is now provided by getPromptComponents(), which
+ * includes the active rules content. Use that instead of this constant
+ * when computing fingerprints that need to reflect custom rules.
+ *
+ * This constant is kept for backward compatibility but does NOT include
+ * rules — always use getPromptComponents() at runtime.
+ */
