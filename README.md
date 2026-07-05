@@ -230,6 +230,26 @@ npx critcache diff main         # review changes vs main
 
 ---
 
+### `providers`
+
+```bash
+$ npx critcache providers
+```
+
+Shows the health and routing status of all providers connected to BTL Runtime — OpenAI, Anthropic, DeepSeek, OpenRouter, Fireworks, Google AI Studio and more. BTL Runtime automatically routes each request to the cheapest healthy provider. Use this as a pre-flight check before running analysis to confirm your preferred providers are healthy.
+
+---
+
+### `coach`
+
+```bash
+$ npx critcache coach
+```
+
+Analyzes your current prompt architecture and scores it for BTL Runtime cacheability (0–100). Shows concrete findings about what is helping or hurting your cache hit rate, specific recommendations to improve it, and an estimated cache hit rate after improvements. Uses BTL Runtime itself to reason about BTL Runtime caching — the only tool that coaches you on your own prompt architecture.
+
+---
+
 ## CI integration — GitHub Actions
 
 critcache fits naturally into CI pipelines. Here's a complete GitHub Actions workflow that runs critcache on every PR, uploads SARIF to GitHub Code Scanning, and posts results as a PR comment.
@@ -529,6 +549,7 @@ critcache uses the following BTL Runtime endpoints:
 | `POST /v1/chat/completions` | `analyze`, `compare`, `review-pr`, `watch` | Per-file AI code review and repo-level synthesis |
 | `GET /v1/models` | `models` | Lists all available model slugs across providers |
 | `GET /v1/usage/summary` | `stats` | Cumulative workspace spend, savings, and cache hit breakdown |
+| `GET /v1/providers` | `providers` | Health and routing status of all connected providers |
 
 BTL-specific response headers read per call:
 

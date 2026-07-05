@@ -7,7 +7,7 @@ import { walkRepo } from "./walker.js";
 import { runAnalysis } from "./runner.js";
 import { writeReport } from "./report.js";
 import { runComparison, renderComparisonTable } from "./compare.js";
-import { fetchModels, fetchStats, getPromptComponents, setRulesContent } from "./btl-client.js";
+import { fetchModels, fetchProviders, fetchStats, getPromptComponents, runCacheCoach, setRulesContent } from "./btl-client.js";
 import { loadRules } from "./rules.js";
 import { watchRepo } from "./watch.js";
 import { getDiffFiles, getDiffLabel } from "./diff.js";
@@ -27,7 +27,7 @@ function printBanner() {
   ▄▄▄ ▄▄▄ ▄ ▄▄▄ ▄▄▄ ▄▄▄ ▄▄▄ ▄ ▄ ▄▄▄
   █   █▄▄ █  █  █   █▀█ █   █▀█ █▀▀
   ▀▀▀ ▀   ▀  ▀  ▀▀▀ ▀ ▀ ▀▀▀ ▀ ▀ ▀▀▀`));
-  console.log(chalk.dim(`  v0.1.1 · parallel AI code review · powered by BTL Runtime`));
+  console.log(chalk.dim(`  v0.1.6 · parallel AI code review · powered by BTL Runtime`));
   console.log(chalk.dim(`  ─────────────────────────────────────────────────\n`));
 }
 
@@ -457,6 +457,117 @@ program
         console.error(chalk.red(`Failed to write SARIF report: ${(err as Error).message}`));
       }
     }
+  });
+
+program
+  .command("providers")
+  .description("Show the health and routing status of all providers connected to BTL Runtime.")
+  .action(async () => {
+    printBanner();
+    console.log(chalk.bold(`\nFetching provider catalog from BTL Runtime...\n`));
+
+    const result = await fetchProviders();
+
+    if (result.requestError) {
+      console.error(chalk.red(`Error: ${result.requestError}`));
+      process.exitCode = 1;
+      return;
+    }
+
+    if (result.providers.length === 0 && result.raw) {
+      console.log(chalk.dim("Raw response from BTL Runtime:"));
+      console.log(chalk.dim(JSON.stringify(result.raw, null, 2)));
+      console.log(chalk.dim(`\nView full breakdown at https://runtime.badtheorylabs.com/dashboard/providers`));
+      return;
+    }
+
+    if (result.providers.length === 0) {
+      console.log(chalk.yellow("No provider data returned. Check your GATEWAY_API_KEY."));
+      return;
+    }
+
+    const table = new Table({
+      head: [chalk.bold("Provider"), chalk.bold("Status"), chalk.bold("Latency")],
+    });
+
+    for (const provider of result.providers) {
+      const isHealthy = provider.healthy !== false && provider.status !== "degraded";
+      const statusDisplay = isHealthy
+        ? chalk.green("● healthy")
+        : chalk.red("✕ degraded");
+      const latencyDisplay = provider.latency_ms !== undefined
+        ? chalk.dim(`${provider.latency_ms}ms`)
+        : chalk.dim("—");
+      const nameDisplay = provider.name ?? provider.id;
+
+      table.push([nameDisplay, statusDisplay, latencyDisplay]);
+    }
+
+    console.log(table.toString());
+    console.log(chalk.dim(`\nBTL Runtime automatically routes to the cheapest healthy provider.`));
+    console.log(chalk.dim(`View full details at https://runtime.badtheorylabs.com/dashboard/providers`));
+  });
+
+program
+  .command("coach")
+  .description("Analyze your prompt architecture and get concrete recommendations for improving BTL Runtime cache hit rate.")
+  .action(async () => {
+    printBanner();
+    console.log(chalk.bold(`\ncritcache coach — analyzing your prompt architecture...\n`));
+
+    // Get current fingerprint for context
+    const components = getPromptComponents();
+    const fingerprint = computeFingerprint(components);
+
+    // Get workspace stats for cache hit rate context
+    const statsResult = await fetchStats();
+    const hitRate = statsResult.summary?.cacheHitRate ?? 0;
+    const totalRequests = statsResult.summary?.totalRequests ?? 0;
+
+    const result = await runCacheCoach(
+      fingerprint.system,
+      components.model,
+      components.temperature,
+      !!components.rules,
+      hitRate,
+      totalRequests
+    );
+
+    if (result.requestError) {
+      console.error(chalk.red(`Error: ${result.requestError}`));
+      process.exitCode = 1;
+      return;
+    }
+
+    // Cacheability score bar
+    const score = result.cacheabilityScore;
+    const scoreColor = score >= 80 ? chalk.green : score >= 50 ? chalk.yellow : chalk.red;
+    const barFilled = Math.round(score / 10);
+    const bar = scoreColor("█".repeat(barFilled)) + chalk.dim("░".repeat(10 - barFilled));
+
+    console.log(`  ${bar} ${scoreColor.bold(`${score}/100`)} cacheability score\n`);
+
+    if (result.currentFindings.length > 0) {
+      console.log(chalk.bold("Current findings:\n"));
+      for (const finding of result.currentFindings) {
+        console.log(`  ${chalk.dim("•")} ${finding}`);
+      }
+      console.log();
+    }
+
+    if (result.recommendations.length > 0) {
+      console.log(chalk.bold("Recommendations:\n"));
+      for (const rec of result.recommendations) {
+        console.log(`  ${chalk.green("→")} ${rec}`);
+      }
+      console.log();
+    }
+
+    if (result.estimatedImprovement) {
+      console.log(chalk.cyan(`  ${result.estimatedImprovement}\n`));
+    }
+
+    console.log(chalk.dim(`  Run 'critcache compare .' after making changes to verify improvement.`));
   });
 
 program.parse();

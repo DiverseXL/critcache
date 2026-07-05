@@ -570,6 +570,201 @@ export async function fetchStats(): Promise<FetchStatsResult> {
   return { summary, raw: data };
 }
 
+export interface BtlProvider {
+  id: string;
+  name?: string;
+  status?: string;
+  healthy?: boolean;
+  models?: number;
+  latency_ms?: number;
+}
+
+export interface FetchProvidersResult {
+  providers: BtlProvider[];
+  raw: Record<string, unknown> | null;
+  requestError?: string;
+}
+
+/**
+ * GET /v1/providers — returns the health and routing status of all
+ * providers connected to BTL Runtime.
+ * Used by the `critcache providers` command.
+ */
+export async function fetchProviders(): Promise<FetchProvidersResult> {
+  if (MOCK_MODE) {
+    return {
+      providers: [
+        { id: "openai", name: "OpenAI", status: "healthy", healthy: true, latency_ms: 312 },
+        { id: "anthropic-direct", name: "Anthropic", status: "healthy", healthy: true, latency_ms: 445 },
+        { id: "deepseek-direct", name: "DeepSeek", status: "healthy", healthy: true, latency_ms: 289 },
+        { id: "openrouter", name: "OpenRouter", status: "healthy", healthy: true, latency_ms: 521 },
+        { id: "fireworks", name: "Fireworks", status: "degraded", healthy: false, latency_ms: 1200 },
+        { id: "google-ai-studio", name: "Google AI Studio", status: "healthy", healthy: true, latency_ms: 398 },
+      ],
+      raw: null,
+    };
+  }
+
+  if (!BTL_API_KEY) {
+    return {
+      providers: [],
+      raw: null,
+      requestError: "GATEWAY_API_KEY is not set. Export it before running critcache.",
+    };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${BTL_BASE_URL}/providers`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${BTL_API_KEY}` },
+    });
+  } catch (err) {
+    return {
+      providers: [],
+      raw: null,
+      requestError: `Network error fetching providers: ${(err as Error).message}`,
+    };
+  }
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    return {
+      providers: [],
+      raw: null,
+      requestError: `BTL Runtime returned ${response.status}: ${body.slice(0, 200)}`,
+    };
+  }
+
+  const data = await response.json() as Record<string, unknown>;
+
+  // BTL's exact response shape for /v1/providers is unverified —
+  // store raw and try to extract known fields defensively.
+  const providers: BtlProvider[] = Array.isArray(data?.data)
+    ? (data.data as BtlProvider[])
+    : Array.isArray(data?.providers)
+    ? (data.providers as BtlProvider[])
+    : [];
+
+  return { providers, raw: providers.length === 0 ? data : null };
+}
+
+export interface CacheCoachResult {
+  cacheabilityScore: number; // 0–100
+  currentFindings: string[];
+  recommendations: string[];
+  estimatedImprovement: string;
+  usage: BtlUsageInfo;
+  requestError?: string;
+  parseError?: string;
+}
+
+const COACH_SYSTEM_PROMPT = `You are an expert in LLM prompt caching architecture, specifically for BTL Runtime's exact and prefix caching system.
+
+A prompt hits BTL Runtime's exact cache when: the system prompt, model, temperature, and user message are all byte-identical to a previous call.
+A prompt hits BTL Runtime's prefix cache when: the system prompt prefix is identical but the user message differs.
+
+You will be given information about a CLI tool's prompt architecture. Analyze it and respond with ONLY a JSON object matching this exact shape:
+
+{
+  "cacheability_score": <number 0-100>,
+  "current_findings": ["<finding 1>", "<finding 2>"],
+  "recommendations": ["<concrete recommendation 1>", "<concrete recommendation 2>"],
+  "estimated_improvement": "<e.g. '42% → 87% estimated cache hit rate'>"
+}
+
+Be specific and actionable. Base your analysis only on the information provided.`;
+
+export async function runCacheCoach(
+  systemPromptHash: string,
+  model: string,
+  temperature: number,
+  rulesActive: boolean,
+  cacheHitRate: number,
+  totalRequests: number
+): Promise<CacheCoachResult> {
+  const EMPTY: BtlUsageInfo = {
+    cacheTier: undefined, benchmarkCostUsd: undefined,
+    customerChargeUsd: undefined, savedUsd: undefined,
+    requestId: undefined, responseTimeMs: undefined,
+  };
+
+  if (!BTL_API_KEY && !MOCK_MODE) {
+    return {
+      cacheabilityScore: 0, currentFindings: [],
+      recommendations: [], estimatedImprovement: "",
+      usage: EMPTY,
+      requestError: "GATEWAY_API_KEY is not set.",
+    };
+  }
+
+  if (MOCK_MODE) {
+    return {
+      cacheabilityScore: 72,
+      currentFindings: [
+        "System prompt is fixed and byte-identical across all calls — good for prefix caching",
+        "Temperature is 0 — deterministic outputs improve exact cache hit rate",
+        "Model is stable (btl-2) — no model drift detected",
+        rulesActive
+          ? "Custom rules are active — ensure rules file does not change between runs"
+          : "No custom rules active — cache is maximally stable",
+      ],
+      recommendations: [
+        "Move any file-path context from the system prompt into the user message — it already is, good",
+        "Avoid including timestamps or random IDs anywhere in the request",
+        "Run the same repo twice in quick succession to warm the exact response cache",
+        "Use critcache compare to measure cold-to-warm improvement after each prompt change",
+      ],
+      estimatedImprovement: `${cacheHitRate.toFixed(0)}% → ~87% estimated with stable prompt architecture`,
+      usage: {
+        cacheTier: "none", benchmarkCostUsd: 0.002,
+        customerChargeUsd: 0.001, savedUsd: 0.001,
+        requestId: `mock_coach_${Math.random().toString(36).slice(2, 8)}`,
+        responseTimeMs: 800,
+      },
+    };
+  }
+
+  const userMessage = JSON.stringify({
+    system_prompt_hash: systemPromptHash,
+    model,
+    temperature,
+    rules_active: rulesActive,
+    current_cache_hit_rate_pct: cacheHitRate,
+    total_requests_in_workspace: totalRequests,
+    architecture_notes: [
+      "Fixed system prompt — identical across all file analysis calls",
+      "Variable user message — file content + optional diff context",
+      "Parallel execution — multiple files analyzed concurrently",
+      "No timestamps or random IDs in any prompt component",
+    ],
+  });
+
+  const outcome = await callBtlRuntime(COACH_SYSTEM_PROMPT, userMessage, (raw) => {
+    const stripped = raw.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+    const obj = JSON.parse(stripped);
+    if (typeof obj.cacheability_score !== "number") throw new Error("Invalid coach response shape");
+    return obj;
+  });
+
+  if (outcome.requestError || outcome.parseError || !outcome.parsed) {
+    return {
+      cacheabilityScore: 0, currentFindings: [], recommendations: [],
+      estimatedImprovement: "", usage: outcome.usage,
+      requestError: outcome.requestError,
+      parseError: outcome.parseError,
+    };
+  }
+
+  return {
+    cacheabilityScore: outcome.parsed.cacheability_score,
+    currentFindings: outcome.parsed.current_findings ?? [],
+    recommendations: outcome.parsed.recommendations ?? [],
+    estimatedImprovement: outcome.parsed.estimated_improvement ?? "",
+    usage: outcome.usage,
+  };
+}
+
 /**
  * NOTE: PROMPT_COMPONENTS is now provided by getPromptComponents(), which
  * includes the active rules content. Use that instead of this constant
