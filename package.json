@@ -1,6 +1,6 @@
 {
   "name": "critcache",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Fan out parallel AI code-review agents across a repo through BTL Runtime — and watch the cache savings land live in your terminal.",
   "type": "module",
   "bin": {
