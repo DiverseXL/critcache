@@ -492,6 +492,7 @@ export interface BtlUsageSummary {
   totalRequests?: number;
   totalSpend?: number;
   totalSaved?: number;
+  cachedTokens?: number;
   cacheHitRate?: number;
   period?: string;
 }
@@ -514,6 +515,7 @@ export async function fetchStats(): Promise<FetchStatsResult> {
         totalRequests: 42,
         totalSpend: 0.18,
         totalSaved: 0.09,
+        cachedTokens: 768,
         cacheHitRate: 50,
         period: "all time",
       },
@@ -556,18 +558,91 @@ export async function fetchStats(): Promise<FetchStatsResult> {
 
   const data: any = await response.json();
 
-  // BTL's exact response shape for /v1/usage/summary is unverified —
-  // we store the raw response and try to extract known fields defensively.
-  // If fields differ, raw is printed as a fallback so nothing is lost.
   const summary: BtlUsageSummary = {
-    totalRequests: data?.total_requests ?? data?.totalRequests,
-    totalSpend: data?.total_spend ?? data?.totalSpend ?? data?.total_charge,
-    totalSaved: data?.total_saved ?? data?.totalSaved,
-    cacheHitRate: data?.cache_hit_rate ?? data?.cacheHitRate,
-    period: data?.period ?? "all time",
+    totalRequests: data?.request_count,
+    totalSpend: data?.customer_charge,
+    totalSaved: data?.customer_saved,
+    cachedTokens: data?.cached_input_tokens,
+    cacheHitRate: data?.cache_tiers
+      ? ((data.cache_tiers.exact_response ?? 0) / (data.request_count ?? 1)) * 100
+      : undefined,
+    period: "all time",
   };
 
   return { summary, raw: data };
+}
+
+export interface BtlPricingEntry {
+  id?: string;
+  available_providers?: string[];
+  benchmark_pricing?: {
+    input_per_mtok_min?: number;
+    output_per_mtok_min?: number;
+  };
+}
+
+export interface FetchPricingResult {
+  entries: BtlPricingEntry[];
+  raw: Record<string, unknown> | null;
+  requestError?: string;
+}
+
+/**
+ * GET /v1/account/pricing — returns per-model, per-provider token pricing
+ * for the authenticated workspace.
+ * Used by the `critcache stats` command to display current rates.
+ */
+export async function fetchPricing(): Promise<FetchPricingResult> {
+  if (MOCK_MODE) {
+    return {
+      entries: [
+        { id: "btl-2", available_providers: ["openai"], benchmark_pricing: { input_per_mtok_min: 0.4, output_per_mtok_min: 1.6 } },
+        { id: "gpt-4.1-mini", available_providers: ["openai"], benchmark_pricing: { input_per_mtok_min: 0.4, output_per_mtok_min: 1.6 } },
+        { id: "claude-sonnet-4-6", available_providers: ["anthropic-direct"], benchmark_pricing: { input_per_mtok_min: 3.0, output_per_mtok_min: 15.0 } },
+        { id: "deepseek-chat-v3", available_providers: ["deepseek-direct"], benchmark_pricing: { input_per_mtok_min: 0.27, output_per_mtok_min: 1.1 } },
+      ],
+      raw: null,
+    };
+  }
+
+  if (!BTL_API_KEY) {
+    return {
+      entries: [],
+      raw: null,
+      requestError: "GATEWAY_API_KEY is not set.",
+    };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${BTL_BASE_URL}/account/pricing`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${BTL_API_KEY}` },
+    });
+  } catch (err) {
+    return {
+      entries: [],
+      raw: null,
+      requestError: `Network error fetching pricing: ${(err as Error).message}`,
+    };
+  }
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    return {
+      entries: [],
+      raw: null,
+      requestError: `BTL Runtime returned ${response.status}: ${body.slice(0, 200)}`,
+    };
+  }
+
+  const data = await response.json() as Record<string, unknown>;
+
+  const entries: BtlPricingEntry[] = Array.isArray(data?.data)
+    ? (data.data as BtlPricingEntry[])
+    : [];
+
+  return { entries, raw: entries.length === 0 ? data : null };
 }
 
 export interface BtlProvider {

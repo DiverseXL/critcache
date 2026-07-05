@@ -7,7 +7,7 @@ import { walkRepo } from "./walker.js";
 import { runAnalysis } from "./runner.js";
 import { writeReport } from "./report.js";
 import { runComparison, renderComparisonTable } from "./compare.js";
-import { fetchModels, fetchProviders, fetchStats, getPromptComponents, runCacheCoach, setRulesContent } from "./btl-client.js";
+import { fetchModels, fetchPricing, fetchProviders, fetchStats, getPromptComponents, runCacheCoach, setRulesContent } from "./btl-client.js";
 import { loadRules } from "./rules.js";
 import { watchRepo } from "./watch.js";
 import { getDiffFiles, getDiffLabel } from "./diff.js";
@@ -293,6 +293,50 @@ program
     if (result.raw && Object.keys(result.raw).length > 0 && !result.summary?.totalRequests) {
       console.log(chalk.dim("\nRaw response from BTL Runtime:"));
       console.log(chalk.dim(JSON.stringify(result.raw, null, 2)));
+    }
+
+    // Fetch and display pricing
+    const pricingResult = await fetchPricing();
+
+    if (pricingResult.requestError) {
+      console.log(chalk.dim(`\nPricing: ${pricingResult.requestError}`));
+    } else if (pricingResult.entries.length > 0) {
+      console.log(chalk.bold("\nCurrent pricing (what you pay per token via BTL Runtime):\n"));
+
+      const relevantModels = new Set([
+        "btl-2", "gpt-4.1-mini", "gpt-4o-mini", "claude-sonnet-4-6",
+        "claude-haiku-4-5", "deepseek-chat-v3", "deepseek-v4-flash", "gemini-2.5-flash",
+      ]);
+
+      const pricingTable = new Table({
+        head: [chalk.bold("Model"), chalk.bold("Provider"), chalk.bold("Input /1K tokens"), chalk.bold("Output /1K tokens")],
+      });
+
+      for (const entry of pricingResult.entries) {
+        if (!entry.id || !relevantModels.has(entry.id)) continue;
+
+        const inputPer1k = entry.benchmark_pricing?.input_per_mtok_min !== undefined
+          ? `$${(entry.benchmark_pricing.input_per_mtok_min / 1000).toFixed(5)}`
+          : "—";
+        const outputPer1k = entry.benchmark_pricing?.output_per_mtok_min !== undefined
+          ? `$${(entry.benchmark_pricing.output_per_mtok_min / 1000).toFixed(5)}`
+          : "—";
+        const provider = entry.available_providers?.[0] ?? "—";
+        const modelName = entry.id ?? "—";
+
+        pricingTable.push([
+          modelName,
+          chalk.dim(provider),
+          chalk.green(inputPer1k),
+          chalk.green(outputPer1k),
+        ]);
+      }
+
+      console.log(pricingTable.toString());
+      console.log(chalk.dim("Pricing reflects your current BTL Runtime tier and any active discounts."));
+    } else if (pricingResult.raw) {
+      console.log(chalk.dim("\nRaw pricing response:"));
+      console.log(chalk.dim(JSON.stringify(pricingResult.raw, null, 2)));
     }
 
     console.log(chalk.dim(`\nView full breakdown at https://runtime.badtheorylabs.com/dashboard`));

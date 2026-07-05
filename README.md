@@ -548,8 +548,9 @@ critcache uses the following BTL Runtime endpoints:
 |---|---|---|
 | `POST /v1/chat/completions` | `analyze`, `compare`, `review-pr`, `watch` | Per-file AI code review and repo-level synthesis |
 | `GET /v1/models` | `models` | Lists all available model slugs across providers |
-| `GET /v1/usage/summary` | `stats` | Cumulative workspace spend, savings, and cache hit breakdown |
+| `GET /v1/usage/summary` | `stats` | Cumulative workspace spend, savings, and cache hit breakdown — plus live per-token pricing for every model at your BTL Runtime tier |
 | `GET /v1/providers` | `providers` | Health and routing status of all connected providers |
+| `GET /v1/account/pricing` | `stats` | Current per-token pricing for all models at your BTL Runtime tier |
 
 BTL-specific response headers read per call:
 
